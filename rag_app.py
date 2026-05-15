@@ -133,18 +133,19 @@ if question := st.chat_input("请输入你的问题..."):
     with st.chat_message("user"):
         st.markdown(question)
 
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        full_response = ""
+with st.chat_message("assistant"):
+    placeholder = st.empty()
+    full_response = ""
 
-        if not st.session_state.vector_db:
-    response = llm.invoke(question)
-    full_response = response.content
-    placeholder.markdown(full_response)
-        else:
-            # 修复：用新版invoke方法获取相关文档
-            relevant_docs = st.session_state.vector_db.invoke(question)
-            context = "\n\n".join([doc.page_content for doc in relevant_docs])
+    if not st.session_state.vector_db:
+        response = llm.invoke(question)
+        full_response = response.content
+        placeholder.markdown(full_response)
+
+    else:
+        # 修复：用新版invoke方法获取相关文档
+        relevant_docs = st.session_state.vector_db.invoke(question)
+        context = "\n\n".join([doc.page_content for doc in relevant_docs])
 
             prompt = ChatPromptTemplate.from_messages([
                 ("system", "你是专业的文档问答助手，只能根据提供的文档内容回答，禁止编造。如果文档中没有答案，直接回答：根据文档无法回答该问题。上下文：{context}"),
