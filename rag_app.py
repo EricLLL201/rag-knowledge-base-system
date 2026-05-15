@@ -138,7 +138,7 @@ with st.chat_message("assistant"):
     full_response = ""
 
     if not st.session_state.vector_db:
-        response = llm.invoke(question)
+        rresponse = llm.invoke(question)
         full_response = response.content
         placeholder.markdown(full_response)
 
