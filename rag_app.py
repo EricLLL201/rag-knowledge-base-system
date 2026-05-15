@@ -138,8 +138,9 @@ if question := st.chat_input("请输入你的问题..."):
         full_response = ""
 
         if not st.session_state.vector_db:
-            full_response = " 请先上传文档构建知识库！"
-            placeholder.markdown(full_response)
+    response = llm.invoke(question)
+    full_response = response.content
+    placeholder.markdown(full_response)
         else:
             # 修复：用新版invoke方法获取相关文档
             relevant_docs = st.session_state.vector_db.invoke(question)
