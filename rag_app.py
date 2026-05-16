@@ -3,8 +3,7 @@ import streamlit as st
 
 from dotenv import load_dotenv
 
-from langchain_openai import ChatOpenAI
-from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_community.chat_models import ChatOllama
 
 from langchain_community.document_loaders import (
     PyPDFLoader,
@@ -14,16 +13,10 @@ from langchain_community.document_loaders import (
 )
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
 
 from langchain_core.messages import (
     HumanMessage,
     AIMessage
-)
-
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-    MessagesPlaceholder
 )
 
 # =========================
@@ -31,20 +24,6 @@ from langchain_core.prompts import (
 # =========================
 
 load_dotenv()
-
-api_key = os.getenv("DASHSCOPE_API_KEY")
-
-if not api_key:
-    st.error("未检测到 DASHSCOPE_API_KEY，请检查 .env 文件")
-    st.stop()
-
-# =========================
-# 设置环境变量
-# =========================
-
-os.environ["OPENAI_API_KEY"] = api_key
-os.environ["DASHSCOPE_API_KEY"] = api_key
-os.environ["OPENAI_API_BASE"] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # =========================
 # 页面配置
@@ -58,18 +37,12 @@ st.set_page_config(
 st.title("RAG智能问答系统")
 
 # =========================
-# 初始化模型
+# 初始化本地AI模型
 # =========================
 
-llm = ChatOpenAI(
-    model="qwen-plus",
-    temperature=0.1,
-    streaming=True
-)
-
-embedding = DashScopeEmbeddings(
-    model="text-embedding-v1",
-    dashscope_api_key=api_key
+llm = ChatOllama(
+    model="qwen:7b",
+    temperature=0.1
 )
 
 # =========================
@@ -79,8 +52,8 @@ embedding = DashScopeEmbeddings(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "vector_db" not in st.session_state:
-    st.session_state.vector_db = None
+if "docs" not in st.session_state:
+    st.session_state.docs = []
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -100,10 +73,16 @@ def load_document(file_path, file_name):
             loader = Docx2txtLoader(file_path)
 
         elif file_name.endswith(".txt") or file_name.endswith(".md"):
-            loader = TextLoader(file_path, encoding="utf-8")
+            loader = TextLoader(
+                file_path,
+                encoding="utf-8"
+            )
 
         elif file_name.endswith(".csv"):
-            loader = CSVLoader(file_path, encoding="utf-8")
+            loader = CSVLoader(
+                file_path,
+                encoding="utf-8"
+            )
 
         else:
             st.error(f"不支持的文件格式：{file_name}")
@@ -132,10 +111,15 @@ def create_knowledge_base(files):
         with open(file_path, "wb") as f:
             f.write(file.getbuffer())
 
-        docs.extend(load_document(file_path, file.name))
+        docs.extend(
+            load_document(
+                file_path,
+                file.name
+            )
+        )
 
     if not docs:
-        return None, 0
+        return [], 0
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -144,17 +128,29 @@ def create_knowledge_base(files):
 
     splits = splitter.split_documents(docs)
 
-    db = Chroma.from_documents(
-        documents=splits,
-        embedding=embedding,
-        persist_directory="./advanced_db"
-    )
+    return splits, len(splits)
 
-    retriever = db.as_retriever(
-        search_kwargs={"k": 5}
-    )
+# =========================
+# 简单检索
+# =========================
 
-    return retriever, len(splits)
+def retrieve_docs(question, docs):
+
+    results = []
+
+    question = question.lower()
+
+    for doc in docs:
+
+        content = doc.page_content.lower()
+
+        if any(
+            word in content
+            for word in question.split()
+        ):
+            results.append(doc)
+
+    return results[:3]
 
 # =========================
 # 文档摘要
@@ -164,32 +160,23 @@ def generate_summary(docs):
 
     try:
 
-        context = "\n".join([
+        text = "\n".join([
             doc.page_content
             for doc in docs[:3]
         ])
 
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "请用简洁中文总结文档内容，100字以内"
-            ),
-            (
-                "user",
-                "{context}"
-            )
-        ])
+        prompt = f"""
+请用100字总结以下文档：
 
-        chain = prompt | llm
+{text}
+"""
 
-        response = chain.invoke({
-            "context": context
-        })
+        response = llm.invoke(prompt)
 
         return response.content
 
     except Exception as e:
-        return f"摘要生成失败：{str(e)}"
+        return str(e)
 
 # =========================
 # 侧边栏
@@ -208,12 +195,14 @@ with st.sidebar:
     col1, col2 = st.columns(2)
 
     with col1:
+
         build_btn = st.button(
             "构建知识库",
             type="primary"
         )
 
     with col2:
+
         clear_btn = st.button(
             "清空对话"
         )
@@ -222,17 +211,22 @@ with st.sidebar:
     if build_btn:
 
         if not uploaded_files:
+
             st.warning("请先上传文件")
 
         else:
 
             with st.spinner("正在构建知识库..."):
 
-                retriever, chunk_num = create_knowledge_base(uploaded_files)
+                docs, chunk_num = create_knowledge_base(
+                    uploaded_files
+                )
 
-                st.session_state.vector_db = retriever
+                st.session_state.docs = docs
 
-                st.success(f"知识库构建完成，共 {chunk_num} 个分块")
+                st.success(
+                    f"知识库构建完成，共 {chunk_num} 个分块"
+                )
 
     # 清空历史
     if clear_btn:
@@ -249,6 +243,7 @@ with st.sidebar:
 for msg in st.session_state.messages:
 
     with st.chat_message(msg["role"]):
+
         st.markdown(msg["content"])
 
 # =========================
@@ -265,12 +260,8 @@ if question:
         "content": question
     })
 
-    st.session_state.chat_history.append(
-        HumanMessage(content=question)
-    )
-
-    # 显示用户消息
     with st.chat_message("user"):
+
         st.markdown(question)
 
     # AI 回复
@@ -280,106 +271,72 @@ if question:
 
         full_response = ""
 
-        # =========================
-        # 普通聊天模式
-        # =========================
+        try:
 
-        if not st.session_state.vector_db:
+            # 必须先上传文件
+            if not st.session_state.docs:
 
-            try:
+                st.error("请先上传文件并构建知识库")
 
-                response = llm.invoke(question)
+                st.stop()
 
-                full_response = response.content
+            # =========================
+            # RAG模式
+            # =========================
+
+            relevant_docs = retrieve_docs(
+                question,
+                st.session_state.docs
+            )
+
+            # 没找到相关内容
+            if not relevant_docs:
+
+                full_response = "知识库中未找到相关信息"
 
                 placeholder.markdown(full_response)
 
-            except Exception as e:
-
-                st.error(f"模型调用失败：{str(e)}")
-
-        # =========================
-        # RAG模式
-        # =========================
-
-        else:
-
-            try:
-
-                relevant_docs = st.session_state.vector_db.invoke(question)
+            else:
 
                 context = "\n\n".join([
                     doc.page_content
                     for doc in relevant_docs
                 ])
 
-                prompt = ChatPromptTemplate.from_messages([
-
-                    (
-                        "system",
-                        """
+                prompt = f"""
 你是专业的文档问答助手。
 
-你只能根据提供的文档内容回答问题。
+你只能根据知识库内容回答问题。
 
 禁止编造不存在的信息。
 
-文档内容如下：
+如果知识库没有答案，
+请明确回答：
+“知识库中未找到相关信息”。
+
+知识库内容：
 
 {context}
+
+用户问题：
+
+{question}
 """
-                    ),
 
-                    MessagesPlaceholder(
-                        variable_name="chat_history"
-                    ),
+                response = llm.invoke(prompt)
 
-                    (
-                        "user",
-                        "{question}"
-                    )
-
-                ])
-
-                chain = prompt | llm
-
-                for chunk in chain.stream({
-
-                    "context": context,
-                    "question": question,
-                    "chat_history": st.session_state.chat_history
-
-                }):
-
-                    if chunk.content:
-
-                        full_response += chunk.content
-
-                        placeholder.markdown(
-                            full_response + "▌"
-                        )
+                full_response = response.content
 
                 placeholder.markdown(full_response)
 
-                # 保存AI消息
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": full_response
-                })
-
-                st.session_state.chat_history.append(
-                    AIMessage(content=full_response)
-                )
-
-                # =========================
                 # 来源展示
-                # =========================
-
                 with st.expander("答案来源 & 文档摘要"):
 
                     st.write("### 文档摘要")
 
-                    summary = generate_summary(relevant_docs)
+                    summary = generate_summary(
+                        relevant_docs
+                    )
 
                     st.write(summary)
 
@@ -387,7 +344,7 @@ if question:
 
                     st.write("### 相关文档片段")
 
-                    for idx, doc in enumerate(relevant_docs[:3]):
+                    for idx, doc in enumerate(relevant_docs):
 
                         st.write(f"来源 {idx + 1}")
 
@@ -397,6 +354,12 @@ if question:
 
                         st.divider()
 
-            except Exception as e:
+            # 保存AI消息
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": full_response
+            })
 
-                st.error(f"RAG检索失败：{str(e)}")
+        except Exception as e:
+
+            st.error(f"模型调用失败：{str(e)}")
